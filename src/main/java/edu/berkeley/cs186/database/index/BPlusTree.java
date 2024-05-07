@@ -145,9 +145,9 @@ public class BPlusTree {
         // TODO(proj4_integration): Update the following line
         LockUtil.ensureSufficientLockHeld(lockContext, LockType.NL);
 
-        // TODO(proj2): implement
-
-        return Optional.empty();
+        // TODO Still not sure if this bad boy works, but it might
+        LeafNode node = root.get(key);
+        return node.getKey(key);
     }
 
     /**
@@ -202,8 +202,7 @@ public class BPlusTree {
         LockUtil.ensureSufficientLockHeld(lockContext, LockType.NL);
 
         // TODO(proj2): Return a BPlusTreeIterator.
-
-        return Collections.emptyIterator();
+        return new BPlusTreeIterator();
     }
 
     /**
@@ -235,8 +234,7 @@ public class BPlusTree {
         LockUtil.ensureSufficientLockHeld(lockContext, LockType.NL);
 
         // TODO(proj2): Return a BPlusTreeIterator.
-
-        return Collections.emptyIterator();
+        return new BPlusTreeIterator(key);
     }
 
     /**
@@ -258,6 +256,27 @@ public class BPlusTree {
         // Use the provided updateRoot() helper method to change
         // the tree's root if the old root splits.
 
+        Optional<Pair<DataBox, Long>> putResult = root.put(key, rid);
+
+        if (putResult.equals(Optional.empty())) {
+            return;
+        }
+        // TODO: not sure if this bad boy works in overflow
+
+        // In case the root overflows
+        DataBox splitKey = putResult.get().getFirst();
+        Long rightPageNum = putResult.get().getSecond();
+        BPlusNode oldRoot = root;
+
+        List<DataBox> newKeys = new ArrayList<>();
+        newKeys.add(splitKey);
+
+        List<Long> newChildren = new ArrayList<>();
+        newChildren.add(oldRoot.getPage().getPageNum()); // oldRoot becomes the left child
+        newChildren.add(rightPageNum); // rightNode in overflow is the rightChild
+
+        BPlusNode newRoot = new InnerNode(metadata, bufferManager, newKeys, newChildren, lockContext);
+        updateRoot(newRoot);
         return;
     }
 
@@ -270,11 +289,11 @@ public class BPlusTree {
      * be filled up to full and split in half exactly like in put.
      *
      * This method should raise an exception if the tree is not empty at time
-     * of bulk loading. Bulk loading is used when creating a new Index, so think 
-     * about what an "empty" tree should look like. If data does not meet the 
-     * preconditions (contains duplicates or not in order), the resulting 
-     * behavior is undefined. Undefined behavior means you can handle these 
-     * cases however you want (or not at all) and you are not required to 
+     * of bulk loading. Bulk loading is used when creating a new Index, so think
+     * about what an "empty" tree should look like. If data does not meet the
+     * preconditions (contains duplicates or not in order), the resulting
+     * behavior is undefined. Undefined behavior means you can handle these
+     * cases however you want (or not at all) and you are not required to
      * write any explicit checks.
      *
      * The behavior of this method should be similar to that of InnerNode's
@@ -288,7 +307,26 @@ public class BPlusTree {
         // Note: You should NOT update the root variable directly.
         // Use the provided updateRoot() helper method to change
         // the tree's root if the old root splits.
+        while (data.hasNext()) {
+            Optional<Pair<DataBox, Long>> bulkReturn = root.bulkLoad(data, fillFactor);
+            if (bulkReturn.equals(Optional.empty())) { // Root is not filled
+                return;
+            }
+            // In case the root overflows
+            DataBox splitKey = bulkReturn.get().getFirst();
+            Long rightPageNum = bulkReturn.get().getSecond();
+            BPlusNode oldRoot = root;
 
+            List<DataBox> newKeys = new ArrayList<>();
+            newKeys.add(splitKey);
+
+            List<Long> newChildren = new ArrayList<>();
+            newChildren.add(oldRoot.getPage().getPageNum()); // oldRoot becomes the left child
+            newChildren.add(rightPageNum); // rightNode in overflow is the rightChild
+
+            BPlusNode newRoot = new InnerNode(metadata, bufferManager, newKeys, newChildren, lockContext);
+            updateRoot(newRoot);
+        }
         return;
     }
 
@@ -309,7 +347,7 @@ public class BPlusTree {
         LockUtil.ensureSufficientLockHeld(lockContext, LockType.NL);
 
         // TODO(proj2): implement
-
+        root.remove(key);
         return;
     }
 
@@ -422,20 +460,54 @@ public class BPlusTree {
 
     // Iterator ////////////////////////////////////////////////////////////////
     private class BPlusTreeIterator implements Iterator<RecordId> {
-        // TODO(proj2): Add whatever fields and constructors you want here.
+        DataBox startKey;
+        LeafNode currentNode;
+        Iterator<RecordId> currentIterator;
+        Optional<LeafNode> currentSibling;
+
+        public BPlusTreeIterator(DataBox key) {
+            startKey = key;
+        }
+
+        public BPlusTreeIterator() {
+            currentNode = root.getLeftmostLeaf();
+            currentIterator = currentNode.scanAll();
+        }
 
         @Override
         public boolean hasNext() {
-            // TODO(proj2): implement
+            if (currentNode == null) {
+                currentNode = root.get(startKey);
+                List<DataBox> leafKeys = currentNode.getKeys();
+                int startIndex = leafKeys.indexOf(startKey); // Not using .equals()
 
-            return false;
+                currentIterator = currentNode.scanAll();
+                for (int i = 0; i < startIndex; i++) {
+                    currentIterator.next();
+                }
+            }
+            currentSibling = currentNode.getRightSibling();
+            boolean hasRightSibling = !currentSibling.equals(Optional.empty());
+            // Scan through leaves until a leaf hasNext or leaf doesn't have a sibling
+            while (true) {
+                if (currentIterator.hasNext()) {return true;}
+                if (hasRightSibling){
+                    currentNode = currentSibling.get();
+                    currentSibling = currentNode.getRightSibling();
+                    currentIterator = currentNode.scanAll();
+                    hasRightSibling = !currentSibling.equals(Optional.empty());
+                    continue;
+                }
+                return false;
+            }
         }
 
         @Override
         public RecordId next() {
-            // TODO(proj2): implement
-
-            throw new NoSuchElementException();
+            if (!hasNext()) {
+                throw new NoSuchElementException();
+            }
+            return currentIterator.next();
         }
     }
 }
