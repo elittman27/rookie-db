@@ -86,8 +86,13 @@ public class SortOperator extends QueryOperator {
      * iterator
      */
     public Run sortRun(Iterator<Record> records) {
-        // TODO(proj3_part1): implement
-        return null;
+        List<Record> sortedList = new ArrayList<>();
+        while (records.hasNext()) {
+            sortedList.add(records.next());
+        }
+        sortedList.sort(new RecordComparator());
+        Run newRun = makeRun(sortedList);
+        return newRun;
     }
 
     /**
@@ -107,8 +112,33 @@ public class SortOperator extends QueryOperator {
      */
     public Run mergeSortedRuns(List<Run> runs) {
         assert (runs.size() <= this.numBuffers - 1);
-        // TODO(proj3_part1): implement
-        return null;
+        Run outRun = makeRun();
+        PriorityQueue<Pair<Record, Integer>> PQ = new java.util.PriorityQueue<Pair<Record, Integer>>(runs.size(), new RecordPairComparator());
+        List<BacktrackingIterator<Record>> run_iterators = new ArrayList<BacktrackingIterator<Record>>();
+        // Create a list of run iterators and add the first element from each to the PQ
+        for (int i = 0; i < runs.size(); i++) {
+            BacktrackingIterator<Record> currIter = runs.get(i).iterator();
+            run_iterators.add(currIter);
+            if (currIter.hasNext()){
+                Pair<Record, Integer> newPair = new Pair<Record, Integer>(currIter.next(), i);
+                PQ.add(newPair);
+            }
+        }
+
+        while (!PQ.isEmpty()) {
+            // Poll smallest from PQ and add to outList
+            Pair<Record, Integer> minPair = PQ.poll();
+            Record currRecord = minPair.getFirst();
+            Integer currInt = minPair.getSecond();
+            outRun.add(currRecord);
+            // Take next value from iterator and place in PQ
+            BacktrackingIterator<Record> currIter = run_iterators.get(currInt);
+            if (currIter.hasNext()) {
+                Pair<Record, Integer> newPair = new Pair<Record, Integer>(currIter.next(), currInt);
+                PQ.add(newPair);
+            }
+        }
+        return outRun;
     }
 
     /**
@@ -132,8 +162,13 @@ public class SortOperator extends QueryOperator {
      * @return a list of sorted runs obtained by merging the input runs
      */
     public List<Run> mergePass(List<Run> runs) {
-        // TODO(proj3_part1): implement
-        return Collections.emptyList();
+        List<Run> outRuns = new ArrayList<>();
+        for (int i = 0; i < runs.size(); i += numBuffers - 1) {
+            List<Run> sortedRunsChunk = runs.subList(i, Math.min(i + numBuffers - 1, runs.size()));
+            Run sortedRunChunk = mergeSortedRuns(sortedRunsChunk);
+            outRuns.add(sortedRunChunk);
+        }
+        return outRuns;
     }
 
     /**
@@ -147,9 +182,22 @@ public class SortOperator extends QueryOperator {
     public Run sort() {
         // Iterator over the records of the relation we want to sort
         Iterator<Record> sourceIterator = getSource().iterator();
+        List<Run> sortedRuns = new ArrayList<>();
+        if (!sourceIterator.hasNext()) {
+            return makeRun();
+        }
+        // Create all of the sorted runs
+        while (sourceIterator.hasNext()) {
+            BacktrackingIterator<Record> block = getBlockIterator(sourceIterator, outputSchema, numBuffers);
+            Run sortedRun = sortRun(block);
+            sortedRuns.add(sortedRun);
+        }
+        // Repeatedly call mergePass until we have a list of a single run
+        while (sortedRuns.size() != 1) {
+            sortedRuns = mergePass(sortedRuns);
+        }
 
-        // TODO(proj3_part1): implement
-        return makeRun(); // TODO(proj3_part1): replace this!
+        return sortedRuns.get(0);
     }
 
     /**

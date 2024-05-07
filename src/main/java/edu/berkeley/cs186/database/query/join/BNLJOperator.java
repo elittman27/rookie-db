@@ -5,6 +5,7 @@ import edu.berkeley.cs186.database.common.iterator.BacktrackingIterator;
 import edu.berkeley.cs186.database.query.JoinOperator;
 import edu.berkeley.cs186.database.query.QueryOperator;
 import edu.berkeley.cs186.database.table.Record;
+import edu.berkeley.cs186.database.table.Schema;
 
 import java.util.Iterator;
 import java.util.NoSuchElementException;
@@ -66,6 +67,9 @@ public class BNLJOperator extends JoinOperator {
             super();
             this.leftSourceIterator = getLeftSource().iterator();
             this.fetchNextLeftBlock();
+            if (leftBlockIterator.hasNext()) {
+                this.leftRecord = leftBlockIterator.next();
+            }
 
             this.rightSourceIterator = getRightSource().backtrackingIterator();
             this.rightSourceIterator.markNext();
@@ -88,6 +92,11 @@ public class BNLJOperator extends JoinOperator {
          */
         private void fetchNextLeftBlock() {
             // TODO(proj3_part1): implement
+            // BacktrackingIterator<Record> getBlockIterator(Iterator<Record> records, Schema schema, int maxPages)
+            this.leftBlockIterator = getBlockIterator(
+                this.leftSourceIterator, getLeftSource().getSchema(), numBuffers - 2
+            );
+            this.leftBlockIterator.markNext();
         }
 
         /**
@@ -102,7 +111,10 @@ public class BNLJOperator extends JoinOperator {
          * Make sure you pass in the correct schema to this method.
          */
         private void fetchNextRightPage() {
-            // TODO(proj3_part1): implement
+            this.rightPageIterator = getBlockIterator(
+                this.rightSourceIterator, getRightSource().getSchema(), 1
+            );
+            this.rightPageIterator.markNext();
         }
 
         /**
@@ -114,8 +126,51 @@ public class BNLJOperator extends JoinOperator {
          * of JoinOperator).
          */
         private Record fetchNextRecord() {
-            // TODO(proj3_part1): implement
-            return null;
+
+            if (leftRecord == null) {
+                // The left source was empty, nothing to fetch
+                return null;
+            }
+
+            while (true) {
+                // Case 1: The right page iterator has a value to yield
+                if (this.rightPageIterator.hasNext()) {
+                    Record rightRecord = rightPageIterator.next();
+                    if (compare(leftRecord, rightRecord) == 0) {
+                        return leftRecord.concat(rightRecord);
+                    }
+                }
+                // Case 2: The right page iterator doesn't have a value to yield but the left block iterator does
+                else if (leftBlockIterator.hasNext() && !this.rightPageIterator.hasNext()) {
+                    this.rightPageIterator.reset();
+                    this.leftRecord = leftBlockIterator.next();
+                }
+
+                // Case 3: Neither the right page nor left block iterators have
+                // values to yield, but there's more right pages
+                else if (!leftBlockIterator.hasNext() && !rightPageIterator.hasNext() && rightSourceIterator.hasNext()) {
+                    leftBlockIterator.reset();
+                    this.leftRecord = leftBlockIterator.next();
+                    fetchNextRightPage();
+                }
+
+                // Case 4: Neither right page nor left block iterators have values
+                // nor are there more right pages, but there are still left blocks
+                else if (
+                    !leftBlockIterator.hasNext() && leftSourceIterator.hasNext() &&
+                    !rightPageIterator.hasNext() && !rightSourceIterator.hasNext()
+                ) {
+                    rightSourceIterator.reset();
+                    fetchNextRightPage();
+                    fetchNextLeftBlock();
+                    this.leftRecord = leftBlockIterator.next();
+                }
+
+                else {
+                    return null;
+                }
+
+            }
         }
 
         /**

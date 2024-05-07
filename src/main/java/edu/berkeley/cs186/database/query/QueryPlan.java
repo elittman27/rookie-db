@@ -575,8 +575,29 @@ public class QueryPlan {
      */
     public QueryOperator minCostSingleAccess(String table) {
         QueryOperator minOp = new SequentialScanOperator(this.transaction, table);
+        int minCost = minOp.estimateIOCost();
+        boolean isIndexScan = false;
+        int minIndex = 0;
 
-        // TODO(proj3_part2): implement
+        List<Integer> indexCols = getEligibleIndexColumns(table);
+        for (int index : indexCols) {
+            SelectPredicate sp = this.selectPredicates.get(index);
+            QueryOperator indexOp = new IndexScanOperator(transaction, table, sp.column, sp.operator, sp.value);
+            int indexCost = indexOp.estimateIOCost();
+            if (indexCost < minCost) {
+                minIndex = index;
+                minOp = indexOp;
+                minCost = indexCost;
+                isIndexScan = true;
+            }
+        }
+
+        if (isIndexScan) {
+            minOp = addEligibleSelections(minOp, minIndex);
+        } else { // Push down for sequential scans
+            minOp = addEligibleSelections(minOp, -1);
+        }
+
         return minOp;
     }
 
@@ -630,23 +651,41 @@ public class QueryPlan {
             Map<Set<String>, QueryOperator> prevMap,
             Map<Set<String>, QueryOperator> pass1Map) {
         Map<Set<String>, QueryOperator> result = new HashMap<>();
-        // TODO(proj3_part2): implement
-        // We provide a basic description of the logic you have to implement:
-        // For each set of tables in prevMap
-        //   For each join predicate listed in this.joinPredicates
-        //      Get the left side and the right side of the predicate (table name and column)
-        //
-        //      Case 1: The set contains left table but not right, use pass1Map
-        //              to fetch an operator to access the rightTable
-        //      Case 2: The set contains right table but not left, use pass1Map
-        //              to fetch an operator to access the leftTable.
-        //      Case 3: Otherwise, skip this join predicate and continue the loop.
-        //
-        //      Using the operator from Case 1 or 2, use minCostJoinType to
-        //      calculate the cheapest join with the new table (the one you
-        //      fetched an operator for from pass1Map) and the previously joined
-        //      tables. Then, update the result map if needed.
-        return result;
+
+        // Iterate through sets of joined tables
+        for(Map.Entry<Set<String>, QueryOperator> entry : prevMap.entrySet()) {
+            Set<String> key = entry.getKey();
+            QueryOperator value = entry.getValue();
+            // For each joinPredicate, check if you can join a new table into the set of joined tables
+            // Also compute the best way to do accomplish that
+            for (JoinPredicate jp : this.joinPredicates) {
+                String leftTable = jp.leftTable;
+                String leftCol = jp.leftColumn;
+                String rightTable = jp.rightTable;
+                String rightCol = jp.rightColumn;
+
+                if (key.contains(leftTable) && !key.contains(rightTable)) {
+                  // Case 1: The set contains left table but not right, use pass1Map
+                  //         to fetch an operator to access the rightTable
+                    QueryOperator rightOp = pass1Map.get(Set.of(rightTable));
+                    QueryOperator joinOp = minCostJoinType(value, rightOp, leftCol, rightCol);
+                    Set<String> allTables = new HashSet<>(key);
+                    allTables.add(rightTable);
+                    result.put(allTables, joinOp);
+                } else if (key.contains(rightTable) && !key.contains(leftTable)) {
+                    // Case 2: The set contains right table but not left, use pass1Map
+                    //         to fetch an operator to access the leftTable.
+                    QueryOperator leftOp = pass1Map.get(Set.of(leftTable));
+                    QueryOperator joinOp = minCostJoinType(leftOp, value, leftCol, rightCol);
+                    Set<String> allTables = new HashSet<>(key);
+                    allTables.add(leftTable);
+                    result.put(allTables, joinOp);
+                } else {
+                    continue;
+                }
+            }
+        }
+                return result;
     }
 
     // Task 7: Optimal Plan Selection //////////////////////////////////////////
@@ -687,15 +726,28 @@ public class QueryPlan {
         // Pass 1: For each table, find the lowest cost QueryOperator to access
         // the table. Construct a mapping of each table name to its lowest cost
         // operator.
-        //
-        // Pass i: On each pass, use the results from the previous pass to find
-        // the lowest cost joins with each table from pass 1. Repeat until all
-        // tables have been joined.
-        //
-        // Set the final operator to the lowest cost operator from the last
-        // pass, add group by, project, sort and limit operators, and return an
-        // iterator over the final operator.
-        return this.executeNaive(); // TODO(proj3_part2): Replace this!
+
+        // Build the pass1Map
+        Map<Set<String>, QueryOperator> pass1Map = new HashMap<>();
+        Map<Set<String>, QueryOperator> prevMap = new HashMap<>();
+        for (String table : this.tableNames) {
+            QueryOperator singleAcc = minCostSingleAccess(table);
+            pass1Map.put(Set.of(table), singleAcc);
+            prevMap.put(Set.of(table), singleAcc);
+        }
+
+        while (prevMap.entrySet().iterator().next().getKey().size() < this.tableNames.size()) {
+            prevMap = minCostJoins(prevMap, pass1Map);
+        }
+        this.finalOperator = minCostOperator(prevMap);
+        this.addGroupBy();
+        this.addProject();
+        this.addSort();
+        this.addLimit();
+
+        // prevMap now has the all the sets of joins
+        return this.finalOperator.iterator();
+
     }
 
     // EXECUTE NAIVE ///////////////////////////////////////////////////////////

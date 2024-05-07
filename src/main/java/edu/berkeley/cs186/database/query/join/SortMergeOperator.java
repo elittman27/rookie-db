@@ -2,6 +2,7 @@ package edu.berkeley.cs186.database.query.join;
 
 import edu.berkeley.cs186.database.TransactionContext;
 import edu.berkeley.cs186.database.common.iterator.BacktrackingIterator;
+import edu.berkeley.cs186.database.databox.DataBox;
 import edu.berkeley.cs186.database.query.JoinOperator;
 import edu.berkeley.cs186.database.query.MaterializeOperator;
 import edu.berkeley.cs186.database.query.QueryOperator;
@@ -86,6 +87,7 @@ public class SortMergeOperator extends JoinOperator {
      *
      */
     private class SortMergeIterator implements Iterator<Record> {
+
         /**
         * Some member variables are provided for guidance, but there are many possible solutions.
         * You should implement the solution that's best for you, using any member variables you need.
@@ -97,12 +99,20 @@ public class SortMergeOperator extends JoinOperator {
         private Record nextRecord;
         private Record rightRecord;
         private boolean marked;
+        private boolean emptyInput;
 
         private SortMergeIterator() {
             super();
             leftIterator = getLeftSource().iterator();
             rightIterator = getRightSource().backtrackingIterator();
             rightIterator.markNext();
+
+            // Empty and Empty
+            if (!leftIterator.hasNext() || !rightIterator.hasNext()) {
+                this.emptyInput = true;
+            } else {
+                this.emptyInput = false;
+            }
 
             if (leftIterator.hasNext() && rightIterator.hasNext()) {
                 leftRecord = leftIterator.next();
@@ -139,8 +149,60 @@ public class SortMergeOperator extends JoinOperator {
          * or null if there are no more records to join.
          */
         private Record fetchNextRecord() {
-            // TODO(proj3_part1): implement
-            return null;
+            if (this.emptyInput == true) {
+                return null;
+            }
+            if (leftRecord == null) {
+                return null;
+            }
+            while (true) {
+                if (!marked) {
+                    while (compare(leftRecord, rightRecord) == -1) { // R < S advance R
+                        if (!leftIterator.hasNext()) {
+                            return null;
+                        }
+                        leftRecord = leftIterator.next();
+                    }
+                    while (compare(leftRecord, rightRecord) == 1) { // R > S advance S
+                        if (!rightIterator.hasNext()) {
+                            return null;
+                        }
+                        rightRecord = rightIterator.next();
+                    }
+
+                    marked = true;
+                    rightIterator.markPrev(); // Mark S
+                }
+
+                if (compare(leftRecord, rightRecord) == 0) { // R == S
+                    Record result = leftRecord.concat(rightRecord);
+                    if (rightIterator.hasNext()) {
+                        rightRecord = rightIterator.next();
+                    } else {
+                        rightIterator.reset();
+                        rightRecord = rightIterator.next();
+                        if (leftIterator.hasNext()) {
+                            leftRecord = leftIterator.next();
+                        } else {
+                            leftRecord = null;
+                        }
+                        marked = false;
+                    }
+                    return result;
+
+                } else { // R != S
+                    rightIterator.reset();
+                    rightRecord = rightIterator.next();
+                    if (leftIterator.hasNext()) {
+                        leftRecord = leftIterator.next();
+                    } else {
+                        leftRecord = null;
+                    }
+                    marked = false;
+                }
+
+
+            }
         }
 
         @Override
